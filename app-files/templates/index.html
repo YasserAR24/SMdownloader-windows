@@ -1,0 +1,123 @@
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>{{ app_name }}</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='base.css') }}">
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+    <header>
+        <a class="header-button brand" href="/">{{ app_name }}</a>
+        <button type="button" class="header-button options-button" id="open-options">Options</button>
+    </header>
+
+    <main>
+        <section class="panel">
+            <form id="add-form" autocomplete="off">
+                <div class="row">
+                    <div class="field grow">
+                        <label for="url">Video or playlist URL</label>
+                        <div class="url-input-wrap">
+                            <input id="url" type="text" inputmode="url" placeholder="https://..." autofocus>
+                            <button type="button" class="action secondary small paste-button" id="paste-url">Paste</button>
+                        </div>
+                    </div>
+                    <div class="field">
+                        <label for="quality">Quality</label>
+                        <select id="quality">
+                            {% for value, label in quality_options %}
+                            <option value="{{ value }}"{% if value == default_quality %} selected{% endif %}>{{ label }}</option>
+                            {% endfor %}
+                        </select>
+                    </div>
+                    <button type="submit" class="action">Download</button>
+                </div>
+                <div class="time-range-fields" id="time-range-fields" hidden>
+                    <p class="time-range-status" id="time-range-status" aria-live="polite">Select a video to load its duration.</p>
+                    <div id="timeline-controls" hidden>
+                        <div class="timeline-readout">
+                            <output id="start-time-label">0:00</output>
+                            <span>Video length <strong id="video-duration-label">--:--</strong></span>
+                            <output id="end-time-label">--:--</output>
+                        </div>
+                        <div class="timeline-slider" id="timeline-slider">
+                            <div class="timeline-track"></div>
+                            <div class="timeline-selection" id="timeline-selection"></div>
+                            <input id="start-time" type="range" min="0" max="1" value="0" step="1" aria-label="Clip start time">
+                            <input id="end-time" type="range" min="0" max="1" value="1" step="1" aria-label="Clip end time">
+                        </div>
+                        <div class="timeline-scale">
+                            <span>0:00</span>
+                            <span id="duration-scale">--:--</span>
+                        </div>
+                        <div class="manual-time-range">
+                            <div class="field">
+                                <label for="start-time-text">Start time</label>
+                                <input id="start-time-text" type="text" inputmode="numeric" placeholder="1:00">
+                            </div>
+                            <div class="field">
+                                <label for="end-time-text">End time</label>
+                                <input id="end-time-text" type="text" inputmode="numeric" placeholder="5:00">
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                <div class="field title-field">
+                    <label for="custom-title">Video title (optional)</label>
+                    <div class="title-input-row">
+                        <input id="custom-title" type="text" maxlength="500" placeholder="Leave empty to use the original title">
+                        <button type="button" class="action secondary time-range-trigger" id="select-time" aria-expanded="false">Select time</button>
+                    </div>
+                </div>
+                <label for="download-subtitles" class="checkbox-label">
+                    <input id="download-subtitles" type="checkbox">
+                    <span>English subtitles</span>
+                </label>
+                <p class="note" id="quality-note"></p>
+                <p class="msg" id="msg" role="alert" hidden></p>
+            </form>
+        </section>
+
+        <div id="pickers"></div>
+
+        <section class="panel">
+            <div class="queue-head">
+                <h2>Queue</h2>
+                <button type="button" class="action secondary small" id="clear">Clear finished</button>
+            </div>
+            <ul id="jobs"></ul>
+            <p class="empty" id="empty">Nothing here yet. Paste a link above.</p>
+        </section>
+
+        <p class="conn" id="conn" hidden>Lost connection to the server. Retrying...</p>
+        <p class="footer">
+            Downloads are saved to: <span id="output-root">{{ output_root }}</span>
+        </p>
+    </main>
+
+    <dialog id="options-dialog" class="options-dialog">
+        <form id="settings-form" autocomplete="off">
+            <div class="options-head">
+                <h2>Options</h2>
+                <button type="button" class="header-button close-options" id="close-options" aria-label="Close options">Close</button>
+            </div>
+            <label for="output-root-input">Default download folder</label>
+            <div class="path-row">
+                <input id="output-root-input" type="text" autocomplete="off" required>
+                <button type="button" class="action secondary" id="browse-folder">Browse...</button>
+            </div>
+            <label for="max-concurrent-downloads">Maximum simultaneous downloads</label>
+            <input id="max-concurrent-downloads" type="number" min="1" step="1" value="{{ max_concurrent_downloads }}" required>
+            <p class="msg" id="settings-msg" role="alert" hidden></p>
+            <div class="options-actions">
+                <button type="button" class="action secondary" id="cancel-options">Cancel</button>
+                <button type="submit" class="action" id="save-settings">Save</button>
+            </div>
+        </form>
+    </dialog>
+
+    <script src="{{ url_for('static', filename='app.js') }}"></script>
+</body>
+</html>

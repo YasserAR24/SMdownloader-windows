@@ -1,0 +1,94 @@
+/* =====================================================
+   base.css - shared by every page (colors + header)
+   Change colors ONLY here, in :root.
+   ===================================================== */
+:root {
+    --color-page-bg: rgb(1 1 22);
+    --color-header-bg: #1f1f2f;
+    --color-glow: #6b6e77;
+    --color-panel-bg: rgb(82 85 103 / 30%);
+    --color-tab-selected: rgb(39 43 63 / 40%);
+    --color-hover: rgb(141 140 140 / 30%);
+    --color-text: white;
+    --color-text-muted: rgb(255 255 255 / 50%);
+
+    --color-card-info-bg: rgb(0 0 0 / 70%);
+    --color-card-shadow: rgb(0 0 0 / 50%);
+    --color-card-fallback: rgb(65 65 65);
+
+    --color-add-card-bg: rgb(65 65 65 / 35%);
+    --color-add-card-bg-hover: rgb(65 65 65 / 60%);
+    --color-add-card-border: rgb(255 255 255 / 50%);
+    --color-add-card-border-hover: rgb(255 255 255 / 90%);
+
+    --color-backdrop: rgb(0 0 0 / 60%);
+    --color-modal-bg: rgb(45 45 45);
+    --color-field-bg: rgb(65 65 65);
+    --color-field-border: rgb(90 90 90);
+    --color-label: rgb(200 200 200);
+    --color-button-main: rgb(1 1 22);
+    --color-button-main-hover: rgb(2 2 43);
+    --color-button-cancel: rgb(90 90 90);
+    --color-button-cancel-hover: rgb(110 110 110);
+    --color-danger: rgb(170 50 50);
+}
+
+* {
+    margin: 0;
+    box-sizing: border-box;
+}
+
+body {
+    min-height: 100vh;
+    background-color: var(--color-page-bg);
+    color: var(--color-text);
+}
+
+/* ===== Header ===== */
+header {
+    position: sticky;
+    top: 0;
+    z-index: 100;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 2px;
+    height: 60px;
+    background-color: var(--color-header-bg);
+    box-shadow: 0 0 5px var(--color-glow);
+}
+
+.header-button {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 65px;
+    height: 45px;
+    padding: 0 8px;
+    border: none;
+    border-radius: 5px;
+    background-color: transparent;
+    color: var(--color-text);
+    font-family: inherit;
+    font-size: 30px;
+    white-space: nowrap;
+    text-decoration: none;
+    cursor: pointer;
+    transition: background-color 0.05s;
+}
+.header-button img {
+    display: block;
+    width: 25px;
+}
+.header-button:hover {
+    background-color: var(--color-hover);
+}
+.header-button.is-selected {
+    background-color: var(--color-tab-selected);
+}
+
+@media (max-width: 480px) {
+    .header-button {
+        font-size: 16px;
+    }
+}
