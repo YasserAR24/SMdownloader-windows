@@ -48,7 +48,10 @@ QUALITIES = ["2160", "1440", "1080", "720", "480", "360"]
 # "high" = best video + audio the site offers, "audio" = MP3 only
 QUALITY_OPTIONS = (
     [("high", "High (best available)")]
-    + [(q, f"{q}p") for q in QUALITIES]
+    + [
+        (q, f"{q}p (4K)" if q == "2160" else f"{q}p (2K)" if q == "1440" else f"{q}p")
+        for q in QUALITIES
+    ]
     + [("audio", "Audio (MP3)")]
 )
 QUALITY_CHOICES = [value for value, _ in QUALITY_OPTIONS]
@@ -110,6 +113,7 @@ ANSI_RE = re.compile(r"\x1b\[[0-9;]*m")
 #         any step can end as error; the user can end it as cancelled/removed.
 # ----------------------------------------------------------------------------
 jobs = {}  # id -> job dict, kept in creation order
+reserved_output_paths = set()
 lock = threading.Lock()
 scheduler_condition = threading.Condition(lock)
 work_queue = queue.Queue()
@@ -156,11 +160,23 @@ def parse_time_input(value):
     return hours * 3600 + minutes * 60 + seconds
 
 
-def make_job(url, quality, status, title=None, download_subtitles=False, custom_title=None, download_range=None):
+def make_job(
+    url,
+    quality,
+    status,
+    title=None,
+    download_subtitles=False,
+    custom_title=None,
+    download_range=None,
+    output_subfolder=None,
+):
     """Create and register a job. The caller must hold `lock`."""
     mode = "audio" if quality == "audio" else "video"
     platform = platform_check(url)
     output_dir = os.path.join(OUTPUT_ROOT, platform.lower()) if platform else OUTPUT_ROOT
+    safe_subfolder = safe_custom_title(output_subfolder)
+    if safe_subfolder:
+        output_dir = os.path.join(output_dir, safe_subfolder)
     job = {
         "id": uuid.uuid4().hex[:12],
         "url": url,
@@ -181,6 +197,7 @@ def make_job(url, quality, status, title=None, download_subtitles=False, custom_
         "eta": None,
         "error": None,
         "file": None,
+        "reserved_output_paths": set(),
         "cancel": False,
         "resume_event": threading.Event(),
         "resume_requested": False,
@@ -207,8 +224,14 @@ def platform_check(url):
         return "Facebook"
     if host == "tiktok.com" or host.endswith(".tiktok.com"):
         return "TikTok"
+    if host == "linkedin.com" or host.endswith(".linkedin.com"):
+        return "LinkedIn"
 
     return None
+
+
+def should_download_english_subtitles(job):
+    return job.get("download_subtitles") and job.get("platform") == "YouTube"
 
 
 def build_opts(job, on_progress, on_postprocess):
@@ -232,13 +255,14 @@ def build_opts(job, on_progress, on_postprocess):
 
     if job.get("download_range"):
         ydl_opts["download_ranges"] = yt_dlp.utils.download_range_func(None, [job["download_range"]])
-        ydl_opts["force_keyframes_at_cuts"] = True
+        if job["mode"] == "video":
+            ydl_opts["force_keyframes_at_cuts"] = True
 
-    if job.get("download_subtitles"):
+    if should_download_english_subtitles(job):
         ydl_opts.update({
             "writesubtitles": True,
             "writeautomaticsub": True,
-            "subtitleslangs": ["en"],
+            "subtitleslangs": ["en.*"],
             "subtitlesformat": "best",
         })
 
@@ -264,10 +288,10 @@ def build_opts(job, on_progress, on_postprocess):
             # works on any site; falls back to "best" when it has no such stream/height
             ydl_opts["format"] = f"bestvideo[height<={q}]+bestaudio/best[height<={q}]/best"
 
-        if job.get("download_subtitles"):
+        if should_download_english_subtitles(job):
             ydl_opts["writesubtitles"] = True
             ydl_opts["writeautomaticsub"] = True
-            ydl_opts["subtitleslangs"] = ["en", "en-US"]
+            ydl_opts["subtitleslangs"] = ["en.*"]
             ydl_opts["subtitlesformat"] = "srt/best"
             ydl_opts["postprocessors"].append({"key": "FFmpegEmbedSubtitle"})
 
@@ -345,6 +369,8 @@ def inspect_url(job_id):
             job["truncated"] = truncated
             job["playlist_title"] = str(info.get("title") or "")[:300] or None
             job["title"] = job["playlist_title"]
+            job["custom_title"] = None
+            job["download_range"] = None
             job["status"] = "choosing"  # waits for the user's selection
             return
         if is_playlist and not entries:
@@ -383,6 +409,63 @@ def final_path(info):
         if path:
             return path
     return info.get("filepath")
+
+
+def has_english_subtitles(info):
+    tracks = (info.get("subtitles") or {}, info.get("automatic_captions") or {})
+    return any(
+        language.lower().replace("_", "-") == "en"
+        or language.lower().replace("_", "-").startswith("en-")
+        for collection in tracks
+        for language in collection
+        if isinstance(language, str)
+    )
+
+
+def reserve_output_path(job, info):
+    filename = info.get("_filename")
+    if not isinstance(filename, str):
+        return
+
+    extension = ".mp3" if job["mode"] == "audio" else ".mp4"
+    output_path = os.path.realpath(os.path.splitext(filename)[0] + extension)
+    with lock:
+        if output_path in job["reserved_output_paths"]:
+            return
+        if os.path.lexists(output_path) or output_path in reserved_output_paths:
+            raise yt_dlp.utils.DownloadError(
+                f'A file named "{os.path.basename(output_path)}" already exists in the download folder.'
+            )
+        reserved_output_paths.add(output_path)
+        job["reserved_output_paths"].add(output_path)
+
+
+def rename_output_file(job, source, title):
+    source = os.path.realpath(source)
+    destination = os.path.join(
+        os.path.dirname(source),
+        title + os.path.splitext(source)[1],
+    )
+    if destination == source:
+        return source
+    if (
+        os.path.lexists(destination)
+        or (
+            destination in reserved_output_paths
+            and destination not in job["reserved_output_paths"]
+        )
+    ):
+        raise yt_dlp.utils.DownloadError(
+            f'A file named "{os.path.basename(destination)}" already exists in the download folder.'
+        )
+
+    os.link(source, destination)
+    try:
+        os.unlink(source)
+    except OSError:
+        os.unlink(destination)
+        raise
+    return destination
 
 
 def remove_partials(paths):
@@ -530,6 +613,15 @@ class SizePlannerPP(PostProcessor):
         self.tracker = tracker
 
     def run(self, info):
+        if (
+            should_download_english_subtitles(self.tracker.job)
+            and self.tracker.job["mode"] == "video"
+            and not has_english_subtitles(info)
+        ):
+            raise yt_dlp.utils.DownloadError(
+                "This video does not have English subtitles."
+            )
+        reserve_output_path(self.tracker.job, info)
         self.tracker.plan(info)
         return [], info
 
@@ -583,6 +675,9 @@ def run_job(job):
         with lock:
             job["file"] = path
             job["title"] = job["title"] or (info or {}).get("title")
+            if path and job.get("custom_title"):
+                path = rename_output_file(job, path, job["custom_title"])
+                job["file"] = path
             if final_size:  # the real size on disk (after merging / MP3 conversion)
                 job["size_done"] = job["size_total"] = final_size
             job["percent"] = 100.0
@@ -605,6 +700,10 @@ def run_job(job):
             job["error"] = f"Unexpected error: {clean_error(e, 400)}"
     finally:
         tracker.stop_range_monitor()
+        with lock:
+            for reserved_path in job["reserved_output_paths"]:
+                reserved_output_paths.discard(reserved_path)
+            job["reserved_output_paths"].clear()
 
 
 def run_scheduled_job(job):
@@ -804,6 +903,74 @@ def browse_settings():
     return jsonify({"output_root": result.stdout.strip() if result.returncode == 0 else ""})
 
 
+@app.post("/api/jobs/<job_id>/move")
+def move_job_file(job_id):
+    with lock:
+        job = jobs.get(job_id)
+        if job is None:
+            return error("No such job.", 404)
+        if job["status"] != "done" or not job["file"]:
+            return error("Only completed downloads can be moved.", 409)
+        source = os.path.realpath(job["file"])
+
+    if not os.path.isfile(source):
+        return error("The downloaded file is no longer available.", 404)
+
+    initial_dir = os.path.dirname(source)
+    zenity = shutil.which("zenity")
+    kdialog = shutil.which("kdialog")
+    if zenity:
+        command = [
+            zenity,
+            "--file-selection",
+            "--directory",
+            "--title=Move video to folder",
+            f"--filename={initial_dir.rstrip(os.sep)}{os.sep}",
+        ]
+    elif kdialog:
+        command = [
+            kdialog,
+            "--getexistingdirectory",
+            initial_dir,
+            "--title",
+            "Move video to folder",
+        ]
+    else:
+        return error("No system folder picker is available.", 503)
+
+    try:
+        result = subprocess.run(command, capture_output=True, text=True, check=False)
+    except OSError as exc:
+        return error(f"Could not open the folder picker: {clean_error(exc)}", 500)
+    if result.returncode in (1,):
+        return jsonify({"cancelled": True})
+    if result.returncode != 0:
+        return error(clean_error(result.stderr) or "The folder picker could not be opened.", 500)
+
+    destination_dir = os.path.realpath(os.path.expanduser(result.stdout.strip()))
+    if not os.path.isdir(destination_dir) or not os.access(destination_dir, os.W_OK):
+        return error("The selected folder is not writable.", 400)
+    destination = os.path.join(destination_dir, os.path.basename(source))
+
+    with lock:
+        job = jobs.get(job_id)
+        if job is None or job["status"] != "done" or job["file"] != source:
+            return error("The downloaded file changed while choosing a folder.", 409)
+        if os.path.lexists(destination):
+            return error(
+                f'A file named "{os.path.basename(destination)}" already exists in the selected folder.',
+                409,
+            )
+        try:
+            moved_path = shutil.move(source, destination)
+        except OSError as exc:
+            return error(f"Could not move the downloaded file: {clean_error(exc)}", 500)
+        job["file"] = os.path.realpath(moved_path)
+        job["output_root"] = destination_dir
+        job["output_dir"] = destination_dir
+        return jsonify({"file_name": os.path.basename(moved_path)})
+
+
 @app.post("/api/jobs")
 def create_job():
     data = request.get_json(silent=True)
@@ -846,8 +1013,6 @@ def create_job():
             return error("Use M:SS or H:MM:SS for start and end times.", 400)
         if end_seconds <= start_seconds:
             return error("End time must be after start time.", 400)
-        if quality == "audio":
-            return error("Time selection is available for video downloads only.", 400)
         download_range = (start_seconds, end_seconds)
 
     with lock:
@@ -887,6 +1052,12 @@ def select_entries(job_id):
     indexes = data.get("indexes") if isinstance(data, dict) else None
     if not isinstance(indexes, list) or not indexes:
         return error("Select at least one video.", 400)
+    folder_name = data.get("folder_name") if isinstance(data, dict) else None
+    if not isinstance(folder_name, str):
+        return error("The playlist folder name must be text.", 400)
+    folder_name = safe_custom_title(folder_name)
+    if not folder_name:
+        return error("Enter a valid playlist folder name.", 400)
 
     with lock:
         job = jobs.get(job_id)
@@ -911,8 +1082,7 @@ def select_entries(job_id):
                 "queued",
                 job["entries"][i - 1]["title"],
                 download_subtitles=job.get("download_subtitles", False),
-                custom_title=job.get("custom_title"),
-                download_range=job.get("download_range"),
+                output_subfolder=folder_name,
             )
             for i in sorted(chosen)
         ]
@@ -961,6 +1131,62 @@ def toggle_pause_job(job_id):
             return error("This job cannot be paused right now.", 409)
         scheduler_condition.notify_all()
         return jsonify({"status": job["status"]})
+
+
+@app.post("/api/jobs/<job_id>/name")
+def edit_job_name(job_id):
+    data = request.get_json(silent=True)
+    if not isinstance(data, dict) or not isinstance(data.get("name"), str):
+        return error("The video name must be text.", 400)
+
+    name = data["name"].strip()
+    if len(name) > MAX_CUSTOM_TITLE_LENGTH:
+        return error(f"The video name must be {MAX_CUSTOM_TITLE_LENGTH} characters or fewer.", 400)
+    custom_title = safe_custom_title(name)
+
+    with lock:
+        job = jobs.get(job_id)
+        if job is None:
+            return error("No such job.", 404)
+        if job["status"] not in ("inspecting", "queued", "downloading", "paused", "error", "done"):
+            return error("The name can't be changed while this job is converting.", 409)
+
+        if job["status"] == "done":
+            source = job["file"]
+            if not source or not os.path.isfile(source):
+                return error("The downloaded file is no longer available.", 409)
+
+            title = custom_title or safe_custom_title(job.get("title"))
+            if not title:
+                return error("A video name is required.", 400)
+
+            try:
+                job["file"] = rename_output_file(job, source, title)
+            except yt_dlp.utils.DownloadError as exc:
+                return error(clean_error(exc), 409)
+            except OSError as exc:
+                return error(f"Could not rename the downloaded file: {clean_error(exc)}", 500)
+        elif job["status"] in ("downloading", "paused") and custom_title:
+            extension = ".mp3" if job["mode"] == "audio" else ".mp4"
+            destination = os.path.realpath(
+                os.path.join(job["output_dir"], custom_title + extension)
+            )
+            if (
+                destination not in job["reserved_output_paths"]
+                and (
+                    os.path.lexists(destination)
+                    or destination in reserved_output_paths
+                )
+            ):
+                return error(
+                    f'A file named "{os.path.basename(destination)}" already exists in the download folder.',
+                    409,
+                )
+            reserved_output_paths.add(destination)
+            job["reserved_output_paths"].add(destination)
+
+        job["custom_title"] = custom_title
+        return jsonify(public(job))
 
 
 @app.post("/api/jobs/<job_id>/retry")

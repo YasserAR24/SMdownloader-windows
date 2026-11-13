@@ -71,6 +71,7 @@
                         <button type="button" class="action secondary time-range-trigger" id="select-time" aria-expanded="false">Select time</button>
                     </div>
                 </div>
+                <p class="note" id="playlist-options-note" hidden>Video title and time selection are unavailable while choosing a playlist.</p>
                 <label for="download-subtitles" class="checkbox-label">
                     <input id="download-subtitles" type="checkbox">
                     <span>English subtitles</span>
@@ -108,8 +109,17 @@
                 <input id="output-root-input" type="text" autocomplete="off" required>
                 <button type="button" class="action secondary" id="browse-folder">Browse...</button>
             </div>
-            <label for="max-concurrent-downloads">Maximum simultaneous downloads</label>
-            <input id="max-concurrent-downloads" type="number" min="1" step="1" value="{{ max_concurrent_downloads }}" required>
+            <div class="setting-row">
+                <div class="setting-copy">
+                    <label for="max-concurrent-downloads">Maximum simultaneous downloads</label>
+                    <p>Downloads running at the same time</p>
+                </div>
+                <div class="number-stepper">
+                    <button type="button" class="number-stepper-button" id="decrease-downloads" aria-label="Decrease maximum simultaneous downloads">−</button>
+                    <input id="max-concurrent-downloads" type="number" min="1" step="1" value="{{ max_concurrent_downloads }}" required>
+                    <button type="button" class="number-stepper-button" id="increase-downloads" aria-label="Increase maximum simultaneous downloads">+</button>
+                </div>
+            </div>
             <p class="msg" id="settings-msg" role="alert" hidden></p>
             <div class="options-actions">
                 <button type="button" class="action secondary" id="cancel-options">Cancel</button>

@@ -8,6 +8,7 @@
     var pickers = {};   // job id -> picker element, or 'loading' while its list is being fetched
     var videoInfoUrl = '';
     var videoDuration = 0;
+    var playlistOptionsUnavailable = false;
 
     function setMsg(text) {
         var m = el('msg');
@@ -30,24 +31,24 @@
         if (isAudio) { checkbox.checked = false; }
     }
 
-    function updateTimeRangeAvailability() {
-        var isAudio = el('quality').value === 'audio';
-        var fields = el('time-range-fields');
-        el('select-time').hidden = isAudio;
-        if (isAudio) {
-            fields.hidden = true;
-            el('timeline-controls').hidden = true;
-            videoInfoUrl = '';
-            videoDuration = 0;
-            el('select-time').setAttribute('aria-expanded', 'false');
-        }
-    }
-
     function clearVideoInfo() {
         videoInfoUrl = '';
         videoDuration = 0;
         el('timeline-controls').hidden = true;
         el('time-range-status').textContent = 'Select a video to load its duration.';
+    }
+
+    function setPlaylistOptionsUnavailable(unavailable) {
+        playlistOptionsUnavailable = unavailable;
+        el('custom-title').disabled = unavailable;
+        el('select-time').disabled = unavailable;
+        el('playlist-options-note').hidden = !unavailable;
+        if (unavailable) {
+            el('time-range-fields').hidden = true;
+            el('timeline-controls').hidden = true;
+            el('select-time').setAttribute('aria-expanded', 'false');
+            clearVideoInfo();
+        }
     }
 
     el('url').addEventListener('input', clearVideoInfo);
@@ -161,7 +162,7 @@
             videoDuration = 0;
             status.textContent = err.message;
         } finally {
-            el('select-time').disabled = false;
+            el('select-time').disabled = playlistOptionsUnavailable;
         }
     }
 
@@ -229,15 +230,25 @@
     }
 
     function describe(job) {
-        if (job.mode === 'video' && job.platform === 'Instagram') { return 'Instagram reel'; }
-        if (job.mode === 'video' && job.platform === 'TikTok') { return 'TikTok reel'; }
-
         var parts = [];
+        var showQualityAndSubtitles = job.platform === 'YouTube' || job.platform === 'Facebook';
         if (job.quality === 'audio') { parts.push('MP3'); }
-        else if (job.quality === 'high') { parts.push('MP4 · best quality'); }
-        else { parts.push('MP4 · up to ' + job.quality + 'p'); }
-        if (job.platform) { parts.push(job.platform); }
-        if (job.download_subtitles) { parts.push('English subtitles'); }
+        else if (showQualityAndSubtitles && job.quality === 'high') { parts.push('MP4 · best quality'); }
+        else if (showQualityAndSubtitles) { parts.push('MP4 · up to ' + job.quality + 'p'); }
+        else { parts.push('MP4'); }
+        var platform = job.platform;
+        if (!platform) {
+            try {
+                platform = new URL(job.url).hostname;
+                if (platform === 'lnkd.in' || platform.endsWith('.lnkd.in')) {
+                    platform = 'LinkedIn';
+                }
+            } catch (err) {
+                platform = 'Other';
+            }
+        }
+        parts.push(platform);
+        if (showQualityAndSubtitles && job.download_subtitles) { parts.push('English subtitles'); }
         return parts.join(' · ');
     }
 
@@ -264,7 +275,7 @@
                 if (job.resume_requested) { return 'Waiting for a download slot'; }
                 return 'Paused' + (job.size_done ? ' · ' + fmtBytes(job.size_done) + ' downloaded' : '');
             case 'processing': return 'Converting...';
-            case 'done': return job.size_total ? 'Finished · ' + fmtBytes(job.size_total) : 'Finished';
+            case 'done': return 'Finished';
             case 'cancelled': return 'Cancelled';
             case 'error': return 'Failed';
             default: return job.status;
@@ -286,12 +297,24 @@
             // Titles, URLs and errors come from remote sites: always textContent, never innerHTML.
             var title = document.createElement('div');
             title.className = 'job-title';
-            title.textContent = job.custom_title || job.title || job.url;
+            var videoLink = document.createElement('a');
+            videoLink.href = job.url;
+            videoLink.target = '_blank';
+            videoLink.rel = 'noopener noreferrer';
+            videoLink.textContent = job.custom_title || job.title || job.url;
+            title.appendChild(videoLink);
             li.appendChild(title);
 
             var meta = document.createElement('div');
             meta.className = 'job-meta';
-            meta.textContent = describe(job) + ' · ' + statusLine(job);
+            meta.appendChild(document.createTextNode(describe(job) + ' · '));
+            var status = document.createElement('span');
+            status.className = 'job-status job-status-' + job.status;
+            status.textContent = statusLine(job);
+            meta.appendChild(status);
+            if (job.status === 'done' && job.size_total) {
+                meta.appendChild(document.createTextNode(' · ' + fmtBytes(job.size_total)));
+            }
             li.appendChild(meta);
 
             var showBar = job.status === 'processing' || job.status === 'done' ||
@@ -319,6 +342,17 @@
 
             var actions = document.createElement('div');
             actions.className = 'job-actions';
+
+            if (job.status === 'inspecting' || job.status === 'queued' ||
+                job.status === 'downloading' || job.status === 'paused' ||
+                job.status === 'error' || job.status === 'done') {
+                var editName = document.createElement('button');
+                editName.type = 'button';
+                editName.className = 'action secondary small';
+                editName.textContent = 'Edit name';
+                editName.addEventListener('click', function () { editJobName(job); });
+                actions.appendChild(editName);
+            }
 
             if (job.status === 'error') {
                 var retry = document.createElement('button');
@@ -356,11 +390,12 @@
                 open.textContent = 'Open';
                 actions.appendChild(open);
 
-                var save = document.createElement('a');
-                save.className = 'action secondary small';
-                save.href = '/api/jobs/' + encodeURIComponent(job.id) + '/file';
-                save.textContent = 'Copy to';
-                actions.appendChild(save);
+                var move = document.createElement('button');
+                move.type = 'button';
+                move.className = 'action secondary small';
+                move.textContent = 'Move to';
+                move.addEventListener('click', function () { moveJobFile(job.id); });
+                actions.appendChild(move);
             }
 
             if (job.status !== 'processing') {
@@ -386,6 +421,36 @@
             setMsg(err.message);
         }
         refresh();
+    }
+
+    async function editJobName(job) {
+        var name = window.prompt('Edit video name', job.custom_title || job.title || '');
+        if (name === null) { return; }
+        try {
+            await api('/api/jobs/' + encodeURIComponent(job.id) + '/name', {
+                method: 'POST',
+                body: JSON.stringify({ name: name })
+            });
+            setMsg('');
+            refresh();
+        } catch (err) {
+            setMsg(err.message);
+        }
+    }
+
+    async function moveJobFile(id) {
+        try {
+            var result = await api('/api/jobs/' + encodeURIComponent(id) + '/move', {
+                method: 'POST',
+                body: '{}'
+            });
+            if (!result.cancelled) {
+                setMsg('Moved "' + result.file_name + '" to the selected folder.');
+                refresh();
+            }
+        } catch (err) {
+            setMsg(err.message);
+        }
     }
 
     async function retryJob(id) {
@@ -425,6 +490,7 @@
     function syncPickers(jobs) {
         var waiting = {};
         jobs.forEach(function (j) { if (j.status === 'choosing') { waiting[j.id] = true; } });
+        setPlaylistOptionsUnavailable(Object.keys(waiting).length > 0);
         Object.keys(pickers).forEach(function (id) { if (!waiting[id]) { removePicker(id); } });
         Object.keys(waiting).forEach(function (id) { if (!pickers[id]) { buildPicker(id); } });
     }
@@ -467,6 +533,25 @@
         name.className = 'picker-title';
         name.textContent = data.title || 'Playlist';
         box.appendChild(name);
+
+        var folderName = data.title || 'Playlist';
+        var folderRow = document.createElement('div');
+        folderRow.className = 'playlist-folder';
+        var folderLabel = document.createElement('span');
+        folderLabel.textContent = 'Save selected videos in: ';
+        var folderValue = document.createElement('strong');
+        folderValue.textContent = folderName;
+        folderRow.appendChild(folderLabel);
+        folderRow.appendChild(folderValue);
+        folderRow.appendChild(button('Edit folder name', 'action secondary small', function () {
+            var editedName = window.prompt('Playlist folder name', folderName);
+            if (editedName === null) { return; }
+            editedName = editedName.trim();
+            if (!editedName) { return; }
+            folderName = editedName;
+            folderValue.textContent = folderName;
+        }));
+        box.appendChild(folderRow);
 
         var boxes = [];
         function update() {
@@ -538,7 +623,7 @@
             try {
                 await api('/api/jobs/' + encodeURIComponent(id) + '/select', {
                     method: 'POST',
-                    body: JSON.stringify({ indexes: chosen })
+                    body: JSON.stringify({ indexes: chosen, folder_name: folderName })
                 });
                 removePicker(id);
             } catch (err) {
@@ -633,10 +718,8 @@
     el('quality').addEventListener('change', function () {
         updateNote();
         updateSubtitleToggle();
-        updateTimeRangeAvailability();
     });
     updateSubtitleToggle();
-    updateTimeRangeAvailability();
 
     el('select-time').addEventListener('click', async function () {
         var fields = el('time-range-fields');
@@ -691,6 +774,18 @@
             settingsMsg.hidden = false;
         } finally {
             browse.disabled = false;
+        }
+    });
+
+    var maxConcurrentInput = el('max-concurrent-downloads');
+    el('increase-downloads').addEventListener('click', function () {
+        maxConcurrentInput.stepUp();
+    });
+    el('decrease-downloads').addEventListener('click', function () {
+        if (maxConcurrentInput.value === '') {
+            maxConcurrentInput.value = maxConcurrentInput.min || '1';
+        } else {
+            maxConcurrentInput.stepDown();
         }
     });
 
