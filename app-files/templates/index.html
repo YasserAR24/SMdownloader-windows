@@ -71,11 +71,26 @@
                         <button type="button" class="action secondary time-range-trigger" id="select-time" aria-expanded="false">Select time</button>
                     </div>
                 </div>
+                <div class="subtitle-check-row">
+                    <button type="button" class="action secondary small subtitle-check-button" id="check-subtitles" aria-label="Check available subtitles" title="Check available subtitles" disabled>Subtitle</button>
+                    <p class="note subtitle-check-status" id="subtitle-check-status" role="status" aria-live="polite" hidden></p>
+                    <div class="subtitle-options" id="subtitle-options" hidden>
+                        <label for="download-subtitles" class="checkbox-label">
+                            <input id="download-subtitles" type="checkbox">
+                            <span>Download subtitles</span>
+                        </label>
+                        <div class="subtitle-language-field">
+                            <label for="subtitle-language">Language</label>
+                            <select id="subtitle-language">
+                                {% for code, language in subtitle_languages.items() %}
+                                <option value="{{ code }}"{% if code == "en" %} selected{% endif %}>{{ language }}</option>
+                                {% endfor %}
+                            </select>
+                        </div>
+                    </div>
+                </div>
+                <div class="playlist-subtitle-results" id="playlist-subtitle-results" hidden></div>
                 <p class="note" id="playlist-options-note" hidden>Video title and time selection are unavailable while choosing a playlist.</p>
-                <label for="download-subtitles" class="checkbox-label">
-                    <input id="download-subtitles" type="checkbox">
-                    <span>English subtitles</span>
-                </label>
                 <p class="note" id="quality-note"></p>
                 <p class="msg" id="msg" role="alert" hidden></p>
             </form>
@@ -120,6 +135,29 @@
                     <button type="button" class="number-stepper-button" id="increase-downloads" aria-label="Increase maximum simultaneous downloads">+</button>
                 </div>
             </div>
+            <fieldset class="subtitle-language-settings">
+                <legend>Subtitle availability check</legend>
+                <p>Choose which languages to test. A language appears for a video only after its subtitle downloads successfully.</p>
+                <div class="subtitle-language-choices">
+                    {% for code, language in subtitle_preflight_languages.items() %}
+                    <label class="subtitle-language-choice">
+                        <input type="checkbox" name="subtitle-preflight-language" value="{{ code }}">
+                        <span class="subtitle-language-choice-copy">
+                            <strong>{{ language }}</strong>
+                            <small>{{ code }}</small>
+                        </span>
+                    </label>
+                    {% endfor %}
+                </div>
+            </fieldset>
+            <div class="setting-row">
+                <div class="setting-copy">
+                    <label>yt-dlp</label>
+                    <p>Update yt-dlp to the latest version</p>
+                </div>
+                <button type="button" class="action secondary" id="update-ytdlp">Update yt-dlp</button>
+            </div>
+            <p class="note" id="ytdlp-update-status" role="status" aria-live="polite" hidden></p>
             <p class="msg" id="settings-msg" role="alert" hidden></p>
             <div class="options-actions">
                 <button type="button" class="action secondary" id="cancel-options">Cancel</button>

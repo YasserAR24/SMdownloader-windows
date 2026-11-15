@@ -1,6 +1,8 @@
 @echo off
 cd /d "%~dp0"
+echo Welcome to SMdownloader.
+echo.
 call .SMdownloadervenv\scripts\activate.bat
-cd app-code
+cd app-files
 start "" "http://localhost:5000"
-python web-downloader.py
+python SMdownloader.py

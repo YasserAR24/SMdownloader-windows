@@ -43,6 +43,14 @@ label {
 .url-input-wrap { position: relative; width: 100%; }
 .url-input-wrap input[type="text"] { padding-right: 76px; }
 .paste-button { position: absolute; top: 4px; right: 4px; height: 34px; padding: 0 10px; }
+.subtitle-check-row { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin-top: 8px; }
+.subtitle-check-button { height: 34px; padding: 0 14px; }
+.subtitle-check-status { margin-top: 0; }
+.playlist-subtitle-results { margin-top: 12px; }
+#playlist-subtitle-results .picker-list li { display: flex; align-items: center; }
+#playlist-subtitle-results .pick { flex: 1; min-width: 0; }
+.playlist-subtitle-checkbox { flex: 0 0 auto; }
+.playlist-subtitle-status { flex: 0 1 auto; max-width: 45%; padding-right: 12px; color: var(--color-text-muted); overflow-wrap: anywhere; }
 .title-input-row { display: flex; align-items: center; gap: 8px; }
 .title-input-row input[type="text"] { flex: 1; min-width: 0; }
 .time-range-trigger { height: 42px; padding: 0 12px; white-space: nowrap; }
@@ -73,6 +81,11 @@ label {
     cursor: pointer;
     color: var(--color-text);
 }
+.subtitle-options { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }
+.subtitle-options .checkbox-label { margin: 0; }
+.subtitle-language-field { display: flex; align-items: center; gap: 8px; }
+.subtitle-language-field label { margin: 0; }
+.subtitle-language-field select { width: 140px; min-width: 0; height: 34px; padding: 0 8px; }
 
 input[type="text"], input[type="number"], select {
     height: 42px;
@@ -214,6 +227,37 @@ input[type="checkbox"] { width: 18px; height: 18px; flex: none; accent-color: va
 .setting-copy { min-width: 0; }
 .options-dialog .setting-copy label { margin: 0; color: var(--color-text); font-size: 14px; font-weight: 600; }
 .setting-copy p { margin-top: 4px; color: var(--color-text-muted); font-size: 12px; }
+.subtitle-language-settings {
+    margin: 16px 0 0;
+    padding: 14px;
+    border: 1px solid var(--color-field-border);
+    border-radius: 10px;
+    background: var(--color-field-bg);
+}
+.subtitle-language-settings legend { padding: 0 6px; font-size: 15px; font-weight: 600; }
+.subtitle-language-settings > p { max-width: 440px; margin: 0; color: var(--color-text-muted); font-size: 12px; line-height: 1.5; }
+.subtitle-language-choices { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; margin-top: 14px; }
+.options-dialog .subtitle-language-choice {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    min-width: 0;
+    margin: 0;
+    color: var(--color-text);
+    font-size: 13px;
+    padding: 10px 12px;
+    border: 1px solid var(--color-field-border);
+    border-radius: 8px;
+    cursor: pointer;
+    transition: border-color 0.15s ease, background-color 0.15s ease;
+}
+.subtitle-language-choice:hover { border-color: var(--color-glow); }
+.subtitle-language-choice:focus-within { outline: 2px solid var(--color-glow); outline-offset: 2px; }
+.subtitle-language-choice:has(input:checked) { border-color: var(--color-glow); background: var(--color-button-cancel); }
+.subtitle-language-choice input { flex: none; margin: 0; }
+.subtitle-language-choice-copy { display: flex; align-items: center; justify-content: space-between; gap: 8px; width: 100%; }
+.subtitle-language-choice-copy strong { font-size: 13px; font-weight: 600; }
+.subtitle-language-choice-copy small { color: var(--color-text-muted); font-size: 11px; text-transform: uppercase; }
 .number-stepper {
     display: flex;
     flex: none;
@@ -260,6 +304,7 @@ input[type="checkbox"] { width: 18px; height: 18px; flex: none; accent-color: va
 @media (max-width: 420px) {
     .setting-row { align-items: flex-start; flex-direction: column; gap: 10px; }
     .number-stepper { align-self: flex-end; }
+    .subtitle-language-choices { grid-template-columns: 1fr; }
 }
 .path-row { display: flex; gap: 8px; align-items: center; }
 .path-row input[type="text"] { flex: 1; min-width: 0; }
