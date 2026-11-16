@@ -162,8 +162,9 @@ input[type="checkbox"] { width: 18px; height: 18px; flex: none; accent-color: va
 .picker-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
 
 /* ---- queue ---- */
-.queue-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px; }
+.queue-head { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 12px; }
 .queue-head h2 { font-size: 18px; font-weight: 600; }
+.queue-controls { display: flex; flex-wrap: wrap; gap: 8px; }
 #jobs { list-style: none; padding: 0; display: flex; flex-direction: column; gap: 10px; }
 .job {
     padding: 12px 14px;

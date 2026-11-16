@@ -13,6 +13,8 @@
     var subtitleLanguages = [];
     var subtitleCheckRequest = 0;
     var subtitleCheckInProgress = false;
+    var playlistSubtitleLanguageChangeHandler = null;
+    var queueBulkActionInProgress = false;
     var subtitleLanguageNames = {
         en: 'English', es: 'Spanish', fr: 'French', de: 'German',
         it: 'Italian', pt: 'Portuguese', ja: 'Japanese', ko: 'Korean',
@@ -90,6 +92,7 @@
         subtitleCheckInProgress = false;
         subtitleInfoUrl = '';
         subtitleLanguages = [];
+        clearPlaylistSubtitleLanguageChangeHandler();
         el('playlist-subtitle-results').replaceChildren();
         el('playlist-subtitle-results').hidden = true;
         var status = el('subtitle-check-status');
@@ -97,6 +100,13 @@
         status.hidden = true;
         updateSubtitleToggle();
         updateSubtitleCheckButton();
+    }
+
+    function clearPlaylistSubtitleLanguageChangeHandler() {
+        if (playlistSubtitleLanguageChangeHandler) {
+            el('subtitle-language').removeEventListener('change', playlistSubtitleLanguageChangeHandler);
+            playlistSubtitleLanguageChangeHandler = null;
+        }
     }
 
     function renderPlaylistSubtitleResults(data, requestId) {
@@ -150,6 +160,7 @@
         } else {
             var boxes = [];
             var checkPending = [];
+            var subtitleAvailability = [];
             var checkEntryCallbacks = [];
             var checkQueue = Promise.resolve();
             var tools = document.createElement('div');
@@ -172,7 +183,12 @@
             function updateCount() {
                 var selected = boxes.filter(function (checkbox) { return checkbox.checked; }).length;
                 var selectedPending = boxes.some(function (checkbox, index) {
-                    return checkbox.checked && checkPending[index];
+                    var verified = subtitleAvailability[index];
+                    return checkbox.checked && (
+                        checkPending[index] ||
+                        !verified ||
+                        verified.language !== el('subtitle-language').value
+                    );
                 });
                 count.textContent = selected + ' of ' + boxes.length + ' selected';
                 download.disabled = selected === 0 || selectedPending;
@@ -188,20 +204,30 @@
                 download.disabled = true;
                 message.hidden = true;
                 try {
+                    var subtitleLanguage = el('subtitle-language').value;
                     await api('/api/playlist-subtitle-download', {
                         method: 'POST',
                         body: JSON.stringify({
                             videos: selected.map(function (entry) {
-                                return { url: entry.url, title: entry.title };
+                                var entryIndex = data.entries.indexOf(entry);
+                                return {
+                                    url: entry.url,
+                                    title: entry.title,
+                                    download_subtitles: subtitleAvailability[entryIndex] !== null &&
+                                        subtitleAvailability[entryIndex] !== undefined &&
+                                        subtitleAvailability[entryIndex].language === subtitleLanguage &&
+                                        subtitleAvailability[entryIndex].available
+                                };
                             }),
                             quality: el('quality').value,
-                            subtitle_language: el('subtitle-language').value,
+                            subtitle_language: subtitleLanguage,
                             folder_name: folderName
                         })
                     });
                     subtitleCheckRequest += 1;
                     subtitleCheckInProgress = false;
                     updateSubtitleCheckButton();
+                    clearPlaylistSubtitleLanguageChangeHandler();
                     container.replaceChildren();
                     container.hidden = true;
                     refresh();
@@ -220,6 +246,7 @@
                     subtitleCheckInProgress = false;
                     updateSubtitleCheckButton();
                 }
+                clearPlaylistSubtitleLanguageChangeHandler();
                 container.replaceChildren();
                 container.hidden = true;
                 var subtitleStatus = el('subtitle-check-status');
@@ -255,11 +282,13 @@
                     var currentRequestId = ++entryRequestId;
                     if (!checkbox.checked) {
                         checkPending[entryIndex] = false;
+                        subtitleAvailability[entryIndex] = null;
                         status.textContent = '';
                         updateCount();
                         return;
                     }
                     checkPending[entryIndex] = true;
+                    subtitleAvailability[entryIndex] = null;
                     status.textContent = 'Waiting...';
                     updateCount();
                     checkQueue = checkQueue.then(async function () {
@@ -269,16 +298,26 @@
                             subtitleCheckRequest !== requestId
                         ) { return; }
                         status.textContent = 'Checking...';
+                        var subtitleLanguage = el('subtitle-language').value;
                         try {
                             var result = await api('/api/subtitle-info', {
                                 method: 'POST',
-                                body: JSON.stringify({ url: entry.url })
+                                body: JSON.stringify({
+                                    url: entry.url,
+                                    languages: [subtitleLanguage]
+                                })
                             });
                             if (
                                 currentRequestId !== entryRequestId ||
                                 !checkbox.checked ||
                                 subtitleCheckRequest !== requestId
                             ) { return; }
+                            subtitleAvailability[entryIndex] = {
+                                language: subtitleLanguage,
+                                available: result.languages.some(function (language) {
+                                    return language.code === subtitleLanguage;
+                                })
+                            };
                             status.textContent = result.languages.length
                                 ? result.languages.map(function (language) { return language.name; }).join(', ')
                                 : 'No downloadable subtitles';
@@ -315,6 +354,13 @@
                 list.appendChild(row);
             });
             container.appendChild(list);
+            clearPlaylistSubtitleLanguageChangeHandler();
+            playlistSubtitleLanguageChangeHandler = function () {
+                checkEntryCallbacks.forEach(function (checkEntry, index) {
+                    if (boxes[index].checked) { checkEntry(); }
+                });
+            };
+            el('subtitle-language').addEventListener('change', playlistSubtitleLanguageChangeHandler);
             updateCount();
         }
 
@@ -653,6 +699,14 @@
         var list = el('jobs');
         list.textContent = '';
         el('empty').hidden = visible.length > 0;
+        el('pause-all').disabled = queueBulkActionInProgress ||
+            !visible.some(function (job) { return job.status === 'downloading'; });
+        el('resume-all').disabled = queueBulkActionInProgress ||
+            !visible.some(function (job) {
+                return job.status === 'paused' && !job.resume_requested;
+            });
+        el('retry-all').disabled = queueBulkActionInProgress ||
+            !visible.some(function (job) { return job.status === 'error'; });
 
         visible.forEach(function (job) {
             var li = document.createElement('li');
@@ -831,6 +885,46 @@
             setMsg(err.message);
         }
         refresh();
+    }
+
+    async function setAllDownloadsPaused(action) {
+        queueBulkActionInProgress = true;
+        el('pause-all').disabled = true;
+        el('resume-all').disabled = true;
+        el('retry-all').disabled = true;
+        try {
+            var result = await api('/api/jobs/pause-all', {
+                method: 'POST',
+                body: JSON.stringify({ action: action })
+            });
+            setMsg(action === 'pause'
+                ? 'Paused ' + result.updated + ' download(s).'
+                : 'Resuming ' + result.updated + ' download(s).');
+        } catch (err) {
+            setMsg(err.message);
+        } finally {
+            queueBulkActionInProgress = false;
+            refresh();
+        }
+    }
+
+    async function retryAllFailedDownloads() {
+        queueBulkActionInProgress = true;
+        el('pause-all').disabled = true;
+        el('resume-all').disabled = true;
+        el('retry-all').disabled = true;
+        try {
+            var result = await api('/api/jobs/retry-all', {
+                method: 'POST',
+                body: '{}'
+            });
+            setMsg('Retrying ' + result.retried + ' failed download(s).');
+        } catch (err) {
+            setMsg(err.message);
+        } finally {
+            queueBulkActionInProgress = false;
+            refresh();
+        }
     }
 
     // ---- playlist pickers (built once per playlist, never re-rendered, so checkbox state survives polling) ----
@@ -1085,6 +1179,13 @@
     el('check-subtitles').addEventListener('click', function () {
         checkSubtitleAvailability();
     });
+    el('pause-all').addEventListener('click', function () {
+        setAllDownloadsPaused('pause');
+    });
+    el('resume-all').addEventListener('click', function () {
+        setAllDownloadsPaused('resume');
+    });
+    el('retry-all').addEventListener('click', retryAllFailedDownloads);
     updateSubtitleToggle();
     updateSubtitleCheckButton();
 

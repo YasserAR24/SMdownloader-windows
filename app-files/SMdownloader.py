@@ -1055,8 +1055,21 @@ def subtitle_info():
     if platform_check(url) != "YouTube":
         return jsonify({"languages": []})
 
-    with lock:
-        languages_to_check = list(SUBTITLE_PREFLIGHT_LANGUAGES)
+    if isinstance(data, dict) and "languages" in data:
+        requested_languages = data["languages"]
+        if (
+            not isinstance(requested_languages, list)
+            or not requested_languages
+            or any(
+                not isinstance(language, str) or language not in SUBTITLE_LANGUAGES
+                for language in requested_languages
+            )
+        ):
+            return error("Choose at least one supported subtitle language.", 400)
+        languages_to_check = list(dict.fromkeys(requested_languages))
+    else:
+        with lock:
+            languages_to_check = list(SUBTITLE_PREFLIGHT_LANGUAGES)
     if not YTDLP_UPDATE_LOCK.acquire(blocking=False):
         return error("Wait for the yt-dlp update to finish, then try again.", 409)
     try:
@@ -1172,7 +1185,10 @@ def download_playlist_subtitle_selection():
             return error("Invalid video selection.", 400)
         if not isinstance(title, str):
             return error("Invalid video title.", 400)
-        normalized_videos.append((url, title[:300]))
+        download_subtitles = video.get("download_subtitles", True)
+        if not isinstance(download_subtitles, bool):
+            return error("The subtitles option must be true or false.", 400)
+        normalized_videos.append((url, title[:300], download_subtitles))
 
     with lock:
         if ytdlp_update_in_progress:
@@ -1183,11 +1199,11 @@ def download_playlist_subtitle_selection():
                 quality,
                 "queued",
                 title,
-                download_subtitles=True,
+                download_subtitles=download_subtitles,
                 subtitle_language=subtitle_language,
                 output_subfolder=folder_name,
             )
-            for url, title in normalized_videos
+            for url, title, download_subtitles in normalized_videos
         ]
     for child in children:
         work_queue.put(child["id"])
@@ -1540,6 +1556,30 @@ def toggle_pause_job(job_id):
         return jsonify({"status": job["status"]})
 
 
+@app.post("/api/jobs/pause-all")
+def set_all_jobs_paused():
+    data = request.get_json(silent=True)
+    action = data.get("action") if isinstance(data, dict) else None
+    if action not in ("pause", "resume"):
+        return error("Choose whether to pause or resume downloads.", 400)
+
+    updated = 0
+    with scheduler_condition:
+        for job in jobs.values():
+            if action == "pause" and job["status"] == "downloading":
+                job["resume_event"].clear()
+                job["status"] = "paused"
+                job["resume_requested"] = False
+                job["speed"] = None
+                job["eta"] = None
+                updated += 1
+            elif action == "resume" and job["status"] == "paused" and not job["resume_requested"]:
+                job["resume_requested"] = True
+                updated += 1
+        scheduler_condition.notify_all()
+    return jsonify({"action": action, "updated": updated})
+
+
 @app.post("/api/jobs/<job_id>/name")
 def edit_job_name(job_id):
     data = request.get_json(silent=True)
@@ -1607,25 +1647,45 @@ def retry_job(job_id):
         if job["status"] != "error":
             return error("Only failed jobs can be retried.", 409)
 
-        job.update({
-            "status": "inspecting",
-            "title": None,
-            "percent": 0.0,
-            "size_done": 0,
-            "size_total": None,
-            "speed": None,
-            "eta": None,
-            "error": None,
-            "file": None,
-            "cancel": False,
-            "entries": None,
-            "playlist_title": None,
-            "truncated": False,
-        })
-        job["resume_event"].set()
+        prepare_job_retry(job)
 
     start_inspect(job_id)
     return jsonify({"status": "inspecting"})
+
+
+def prepare_job_retry(job):
+    job.update({
+        "status": "inspecting",
+        "title": None,
+        "percent": 0.0,
+        "size_done": 0,
+        "size_total": None,
+        "speed": None,
+        "eta": None,
+        "error": None,
+        "file": None,
+        "cancel": False,
+        "entries": None,
+        "playlist_title": None,
+        "truncated": False,
+    })
+    job["resume_event"].set()
+
+
+@app.post("/api/jobs/retry-all")
+def retry_all_jobs():
+    with lock:
+        if ytdlp_update_in_progress:
+            return error("Wait for the yt-dlp update to finish, then try again.", 409)
+        job_ids = []
+        for job in jobs.values():
+            if job["status"] == "error":
+                prepare_job_retry(job)
+                job_ids.append(job["id"])
+
+    for job_id in job_ids:
+        start_inspect(job_id)
+    return jsonify({"retried": len(job_ids)})
 
 
 @app.post("/api/jobs/<job_id>/skip-subtitles")
