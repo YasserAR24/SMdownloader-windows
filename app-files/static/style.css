@@ -86,6 +86,7 @@ label {
 .subtitle-language-field { display: flex; align-items: center; gap: 8px; }
 .subtitle-language-field label { margin: 0; }
 .subtitle-language-field select { width: 140px; min-width: 0; height: 34px; padding: 0 8px; }
+.playlist-subtitle-language { margin-bottom: 10px; }
 
 input[type="text"], input[type="number"], select {
     height: 42px;

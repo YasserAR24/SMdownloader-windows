@@ -66,7 +66,6 @@ REQUIRED_FILES = [
     os.path.join("static", "app.js"),
 ]
 
-MAX_PLAYLIST_ITEMS = 200  # longer playlists are cut here (keeps the picker usable)
 MAX_CUSTOM_TITLE_LENGTH = 500
 DEFAULT_MAX_CONCURRENT_DOWNLOADS = 3
 MAX_SUBTITLE_PREFLIGHT_BYTES = 16 * 1024 * 1024
@@ -278,7 +277,6 @@ def make_job(
         "resume_requested": False,
         "entries": None,         # playlist items, while status == "choosing"
         "playlist_title": None,
-        "truncated": False,
     }
     job["resume_event"].set()
     jobs[job["id"]] = job
@@ -397,13 +395,9 @@ def entry_url(entry):
 
 
 def collect_entries(info):
-    """(entries, truncated) for a playlist info dict. Entries without a usable URL are dropped."""
+    """Return playlist entries that have a usable URL."""
     entries = []
-    truncated = False
     for raw in info.get("entries") or []:
-        if len(entries) >= MAX_PLAYLIST_ITEMS:
-            truncated = True
-            break
         if not raw:
             continue
         url = entry_url(raw)
@@ -415,7 +409,7 @@ def collect_entries(info):
             "url": url,
             "duration": duration if isinstance(duration, (int, float)) else None,
         })
-    return entries, truncated
+    return entries
 
 
 def inspect_url(job_id):
@@ -430,13 +424,12 @@ def inspect_url(job_id):
         "no_warnings": True,
         "noprogress": True,
         "extract_flat": "in_playlist",           # list playlist items without resolving each one
-        "playlistend": MAX_PLAYLIST_ITEMS + 1,   # +1 so we can tell the list was cut
     }
     try:
         with yt_dlp.YoutubeDL(opts) as ydl:
             info = ydl.extract_info(url, download=False) or {}
             is_playlist = info.get("_type") == "playlist"
-            entries, truncated = collect_entries(info) if is_playlist else ([], False)
+            entries = collect_entries(info) if is_playlist else []
     except Exception as e:  # DownloadError, or anything unexpected: never kill the thread silently
         with lock:
             job = jobs.get(job_id)
@@ -451,7 +444,6 @@ def inspect_url(job_id):
             return  # removed while we were looking
         if is_playlist and len(entries) > 1:
             job["entries"] = entries
-            job["truncated"] = truncated
             job["playlist_title"] = str(info.get("title") or "")[:300] or None
             job["title"] = job["playlist_title"]
             job["custom_title"] = None
@@ -1112,7 +1104,6 @@ def playlist_subtitle_entries():
             "no_warnings": True,
             "noprogress": True,
             "extract_flat": "in_playlist",
-            "playlistend": MAX_PLAYLIST_ITEMS + 1,
         }
         with yt_dlp.YoutubeDL(options) as ydl:
             info = ydl.extract_info(url, download=False) or {}
@@ -1124,12 +1115,10 @@ def playlist_subtitle_entries():
     if info.get("_type") != "playlist":
         return jsonify({"is_playlist": False})
 
-    entries, truncated = collect_entries(info)
+    entries = collect_entries(info)
     return jsonify({
         "is_playlist": True,
         "title": str(info.get("title") or "")[:300] or "Playlist",
-        "truncated": truncated,
-        "limit": MAX_PLAYLIST_ITEMS,
         "entries": [
             {
                 "n": index,
@@ -1151,8 +1140,6 @@ def download_playlist_subtitle_selection():
     videos = data.get("videos")
     if not isinstance(videos, list) or not videos:
         return error("Select at least one video.", 400)
-    if len(videos) > MAX_PLAYLIST_ITEMS:
-        return error(f"Select no more than {MAX_PLAYLIST_ITEMS} videos.", 400)
 
     quality = str(data.get("quality") or DEFAULT_QUALITY)
     if quality not in QUALITY_CHOICES:
@@ -1454,8 +1441,6 @@ def job_entries(job_id):
             return error("That job is not waiting for a selection.", 404)
         return jsonify({
             "title": job["playlist_title"],
-            "truncated": job["truncated"],
-            "limit": MAX_PLAYLIST_ITEMS,
             "entries": [
                 {"n": n, "title": e["title"], "duration": e["duration"]}
                 for n, e in enumerate(job["entries"], start=1)
@@ -1667,7 +1652,6 @@ def prepare_job_retry(job):
         "cancel": False,
         "entries": None,
         "playlist_title": None,
-        "truncated": False,
     })
     job["resume_event"].set()
 
@@ -1715,7 +1699,6 @@ def skip_subtitles_job(job_id):
             "cancel": False,
             "entries": None,
             "playlist_title": None,
-            "truncated": False,
         })
         job["resume_event"].set()
 

@@ -14,6 +14,7 @@
     var subtitleCheckRequest = 0;
     var subtitleCheckInProgress = false;
     var playlistSubtitleLanguageChangeHandler = null;
+    var playlistSubtitleLanguageSelect = null;
     var queueBulkActionInProgress = false;
     var subtitleLanguageNames = {
         en: 'English', es: 'Spanish', fr: 'French', de: 'German',
@@ -103,14 +104,16 @@
     }
 
     function clearPlaylistSubtitleLanguageChangeHandler() {
-        if (playlistSubtitleLanguageChangeHandler) {
-            el('subtitle-language').removeEventListener('change', playlistSubtitleLanguageChangeHandler);
-            playlistSubtitleLanguageChangeHandler = null;
+        if (playlistSubtitleLanguageChangeHandler && playlistSubtitleLanguageSelect) {
+            playlistSubtitleLanguageSelect.removeEventListener('change', playlistSubtitleLanguageChangeHandler);
         }
+        playlistSubtitleLanguageChangeHandler = null;
+        playlistSubtitleLanguageSelect = null;
     }
 
     function renderPlaylistSubtitleResults(data, requestId) {
         var container = el('playlist-subtitle-results');
+        clearPlaylistSubtitleLanguageChangeHandler();
         container.className = 'panel picker playlist-subtitle-results';
         var heading = document.createElement('h2');
         heading.textContent = 'Choose videos';
@@ -158,6 +161,25 @@
             empty.textContent = 'No videos were found in this playlist.';
             container.appendChild(empty);
         } else {
+            var subtitleLanguageField = document.createElement('div');
+            subtitleLanguageField.className = 'subtitle-language-field playlist-subtitle-language';
+            var subtitleLanguageLabel = document.createElement('label');
+            subtitleLanguageLabel.htmlFor = 'playlist-subtitle-language';
+            subtitleLanguageLabel.textContent = 'Check subtitle language';
+            playlistSubtitleLanguageSelect = document.createElement('select');
+            playlistSubtitleLanguageSelect.id = 'playlist-subtitle-language';
+            playlistSubtitleLanguageSelect.setAttribute('aria-label', 'Check subtitle language');
+            ['ar', 'en', 'fr'].forEach(function (language) {
+                var option = document.createElement('option');
+                option.value = language;
+                option.textContent = subtitleLanguageNames[language];
+                option.selected = language === 'en';
+                playlistSubtitleLanguageSelect.appendChild(option);
+            });
+            subtitleLanguageField.appendChild(subtitleLanguageLabel);
+            subtitleLanguageField.appendChild(playlistSubtitleLanguageSelect);
+            container.appendChild(subtitleLanguageField);
+
             var boxes = [];
             var checkPending = [];
             var subtitleAvailability = [];
@@ -187,7 +209,7 @@
                     return checkbox.checked && (
                         checkPending[index] ||
                         !verified ||
-                        verified.language !== el('subtitle-language').value
+                        verified.language !== playlistSubtitleLanguageSelect.value
                     );
                 });
                 count.textContent = selected + ' of ' + boxes.length + ' selected';
@@ -204,7 +226,7 @@
                 download.disabled = true;
                 message.hidden = true;
                 try {
-                    var subtitleLanguage = el('subtitle-language').value;
+                    var subtitleLanguage = playlistSubtitleLanguageSelect.value;
                     await api('/api/playlist-subtitle-download', {
                         method: 'POST',
                         body: JSON.stringify({
@@ -275,6 +297,7 @@
                 duration.textContent = fmtDuration(entry.duration);
                 var status = document.createElement('span');
                 status.className = 'playlist-subtitle-status';
+                status.setAttribute('aria-live', 'polite');
                 var entryIndex = boxes.length;
                 checkPending.push(false);
                 var entryRequestId = 0;
@@ -298,7 +321,7 @@
                             subtitleCheckRequest !== requestId
                         ) { return; }
                         status.textContent = 'Checking...';
-                        var subtitleLanguage = el('subtitle-language').value;
+                        var subtitleLanguage = playlistSubtitleLanguageSelect.value;
                         try {
                             var result = await api('/api/subtitle-info', {
                                 method: 'POST',
@@ -318,9 +341,10 @@
                                     return language.code === subtitleLanguage;
                                 })
                             };
-                            status.textContent = result.languages.length
-                                ? result.languages.map(function (language) { return language.name; }).join(', ')
-                                : 'No downloadable subtitles';
+                            var languageName = subtitleLanguageNames[subtitleLanguage];
+                            status.textContent = subtitleAvailability[entryIndex].available
+                                ? languageName + ' subtitles available'
+                                : 'No ' + languageName + ' subtitles found';
                         } catch (err) {
                             if (
                                 currentRequestId === entryRequestId &&
@@ -354,22 +378,15 @@
                 list.appendChild(row);
             });
             container.appendChild(list);
-            clearPlaylistSubtitleLanguageChangeHandler();
             playlistSubtitleLanguageChangeHandler = function () {
                 checkEntryCallbacks.forEach(function (checkEntry, index) {
                     if (boxes[index].checked) { checkEntry(); }
                 });
             };
-            el('subtitle-language').addEventListener('change', playlistSubtitleLanguageChangeHandler);
+            playlistSubtitleLanguageSelect.addEventListener('change', playlistSubtitleLanguageChangeHandler);
             updateCount();
         }
 
-        if (data.truncated) {
-            var cut = document.createElement('p');
-            cut.className = 'note';
-            cut.textContent = 'Only the first ' + data.limit + ' videos are listed.';
-            container.appendChild(cut);
-        }
         if (data.entries.length) {
             container.appendChild(message);
             container.appendChild(actions);
@@ -1048,13 +1065,6 @@
         });
         box.appendChild(ul);
 
-        if (data.truncated) {
-            var cut = document.createElement('p');
-            cut.className = 'note';
-            cut.textContent = 'Only the first ' + data.limit + ' videos are listed.';
-            box.appendChild(cut);
-        }
-
         var msg = document.createElement('p');
         msg.className = 'msg';
         msg.hidden = true;
@@ -1216,12 +1226,9 @@
 
     var optionsDialog = el('options-dialog');
     var settingsMsg = el('settings-msg');
-    var ytdlpUpdateStatus = el('ytdlp-update-status');
     el('open-options').addEventListener('click', async function () {
         settingsMsg.textContent = '';
         settingsMsg.hidden = true;
-        ytdlpUpdateStatus.textContent = '';
-        ytdlpUpdateStatus.hidden = true;
         try {
             var settings = await api('/api/settings');
             el('output-root-input').value = settings.output_root;
@@ -1233,28 +1240,6 @@
             optionsDialog.showModal();
         } catch (err) {
             setMsg(err.message);
-        }
-    });
-
-    el('update-ytdlp').addEventListener('click', async function () {
-        var update = el('update-ytdlp');
-        update.disabled = true;
-        update.textContent = 'Updating...';
-        ytdlpUpdateStatus.textContent = 'Updating yt-dlp. This may take a few minutes.';
-        ytdlpUpdateStatus.hidden = false;
-        settingsMsg.textContent = '';
-        settingsMsg.hidden = true;
-        try {
-            var result = await api('/api/settings/update-ytdlp', {
-                method: 'POST',
-                body: '{}'
-            });
-            ytdlpUpdateStatus.textContent = result.message;
-        } catch (err) {
-            ytdlpUpdateStatus.textContent = err.message;
-        } finally {
-            update.disabled = false;
-            update.textContent = 'Update yt-dlp';
         }
     });
 
