@@ -2,11 +2,6 @@
 
 Download videos and audio from YouTube, Instagram, Facebook, TikTok, LinkedIn and other sites supported by yt-dlp. It runs on your computer and opens in your browser.
 
-## Requirements
-
-- Windows 10 or 11
-- Internet connection
-
 ## Installation (first time only)
 
 1. Download the whole code and extract it.
@@ -21,7 +16,7 @@ If Windows shows "Windows protected your PC", click **More info → Run anyway**
 ## Running
 
 Double-click `runSMdownloader.bat`. Your browser opens the app. If it doesn't, go to http://127.0.0.1:5000.
-To stop, close the black window.
+To stop, close the black window (close CMD window).
 
 ## Updating
 
