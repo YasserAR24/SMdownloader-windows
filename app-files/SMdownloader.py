@@ -88,7 +88,7 @@ SUBTITLE_PREFLIGHT_LANGUAGE_CHOICES = {
     "ar": "Arabic",
     "fr": "French",
 }
-DEFAULT_SUBTITLE_PREFLIGHT_LANGUAGES = ["en"]
+DEFAULT_SUBTITLE_PREFLIGHT_LANGUAGES = ["en", "ar"]
 WINDOWS_RESERVED_FILENAMES = {
     "CON", "PRN", "AUX", "NUL",
     *{f"COM{i}" for i in range(1, 10)},
@@ -183,7 +183,7 @@ ytdlp_update_in_progress = False
 def public(job):
     """Fields the browser is allowed to see (never the server-side file path)."""
     keys = ("id", "url", "mode", "quality", "platform", "status",
-            "title", "percent", "size_done", "size_total", "speed", "eta", "error",
+            "title", "percent", "size_done", "size_total", "size_estimate", "speed", "eta", "error",
             "resume_requested", "download_subtitles", "custom_title", "download_range")
     data = {k: job[k] for k in keys}
     data["subtitle_language"] = job["subtitle_language"]
@@ -266,12 +266,14 @@ def make_job(
         "percent": 0.0,
         "size_done": 0,          # bytes downloaded so far (all streams together)
         "size_total": None,      # total bytes if the site tells us, else None; final file size when done
+        "size_estimate": None,   # approximate selected-range size, if source stream sizes are known
         "speed": None,
         "eta": None,
         "error": None,
         "file": None,
         "subtitle_files": set(),
         "reserved_output_paths": set(),
+        "retry_cleanup_paths": set(),
         "cancel": False,
         "resume_event": threading.Event(),
         "resume_requested": False,
@@ -314,6 +316,104 @@ def should_download_subtitles(job):
         and job.get("mode") == "video"
         and job.get("platform") == "YouTube"
     )
+
+
+SUBTITLE_TIMESTAMP_RE = re.compile(
+    r"(?P<start>(?:\d+:)?\d{2}:\d{2}[,.]\d{3})\s+-->\s+"
+    r"(?P<end>(?:\d+:)?\d{2}:\d{2}[,.]\d{3})"
+)
+
+
+def subtitle_timestamp_ms(value):
+    parts = value.replace(",", ".").split(":")
+    if len(parts) == 2:
+        hours = 0
+        minutes, seconds_milliseconds = parts
+    else:
+        hours, minutes, seconds_milliseconds = parts
+    seconds, milliseconds = seconds_milliseconds.split(".")
+    return (
+        (int(hours) * 3600 + int(minutes) * 60 + int(seconds)) * 1000
+        + int(milliseconds)
+    )
+
+
+def format_subtitle_timestamp(milliseconds, separator, include_hours=True):
+    if not include_hours:
+        minutes, remainder = divmod(milliseconds, 60_000)
+        seconds, milliseconds = divmod(remainder, 1000)
+        return f"{minutes:02}:{seconds:02}{separator}{milliseconds:03}"
+    hours, remainder = divmod(milliseconds, 3_600_000)
+    minutes, remainder = divmod(remainder, 60_000)
+    seconds, milliseconds = divmod(remainder, 1000)
+    return f"{hours:02}:{minutes:02}:{seconds:02}{separator}{milliseconds:03}"
+
+
+def clip_subtitle_file(subtitle, download_range, output_dir):
+    extension = str(subtitle.get("ext") or "").lower()
+    if extension not in {"srt", "vtt"}:
+        app.logger.warning(
+            "Cannot trim %s subtitles to the selected time range; leaving them unchanged",
+            extension or "unknown-format",
+        )
+        return
+
+    path = subtitle.get("filepath")
+    if not isinstance(path, str):
+        return
+    if not os.path.isabs(path):
+        path = os.path.join(output_dir, path)
+    if not os.path.isfile(path):
+        return
+
+    start_ms = round(download_range[0] * 1000)
+    end_ms = round(download_range[1] * 1000)
+    duration_ms = end_ms - start_ms
+    with open(path, encoding="utf-8-sig") as subtitle_file:
+        content = subtitle_file.read()
+
+    blocks = re.split(r"\n[ \t]*\n", content.replace("\r\n", "\n").strip())
+    clipped_blocks = []
+    for block in blocks:
+        lines = block.splitlines()
+        for line_index, line in enumerate(lines):
+            match = SUBTITLE_TIMESTAMP_RE.search(line)
+            if not match:
+                continue
+            cue_start = subtitle_timestamp_ms(match.group("start"))
+            cue_end = subtitle_timestamp_ms(match.group("end"))
+            if cue_end <= start_ms or cue_start >= end_ms:
+                lines = []
+                break
+
+            separator = "," if extension == "srt" else "."
+            include_hours = extension == "srt" or match.group("start").count(":") == 2
+            relative_start = max(0, cue_start - start_ms)
+            relative_end = min(duration_ms, cue_end - start_ms)
+            lines[line_index] = (
+                line[:match.start("start")]
+                + format_subtitle_timestamp(relative_start, separator, include_hours)
+                + line[match.end("start"):match.start("end")]
+                + format_subtitle_timestamp(relative_end, separator, include_hours)
+                + line[match.end("end"):]
+            )
+            break
+        if lines:
+            clipped_blocks.append("\n".join(lines))
+
+    with open(path, "w", encoding="utf-8", newline="\n") as subtitle_file:
+        subtitle_file.write("\n\n".join(clipped_blocks))
+        if clipped_blocks:
+            subtitle_file.write("\n")
+
+
+def clip_requested_subtitles(info, download_range, output_dir):
+    requested = info.get("requested_subtitles") if isinstance(info, dict) else None
+    if not isinstance(requested, dict):
+        return
+    for subtitle in requested.values():
+        if isinstance(subtitle, dict):
+            clip_subtitle_file(subtitle, download_range, output_dir)
 
 
 def build_opts(job, on_progress, on_postprocess):
@@ -376,6 +476,11 @@ def build_opts(job, on_progress, on_postprocess):
             ydl_opts["writeautomaticsub"] = True
             ydl_opts["subtitleslangs"] = [subtitle_pattern]
             ydl_opts["subtitlesformat"] = "srt/best"
+            if job.get("download_range"):
+                ydl_opts["postprocessors"].append({
+                    "key": "FFmpegSubtitlesConvertor",
+                    "format": "srt",
+                })
             ydl_opts["postprocessors"].append({"key": "FFmpegEmbedSubtitle"})
 
     return ydl_opts
@@ -478,6 +583,8 @@ def final_path(info):
     """Path of the finished file (after merge/convert), or None."""
     if not info:
         return None
+    if info.get("filepath"):
+        return info["filepath"]
     for item in info.get("requested_downloads") or []:
         if item.get("filepath"):
             return item["filepath"]
@@ -485,7 +592,7 @@ def final_path(info):
         path = final_path(entry)
         if path:
             return path
-    return info.get("filepath")
+    return None
 
 
 def has_requested_subtitles(info, language):
@@ -687,7 +794,30 @@ class ProgressTracker:
         self.range_monitor = None
         self.range_temp_path = None
         self.range_final_path = None
-        self.range_total = None
+
+    @staticmethod
+    def estimate_range_size(info, streams, download_range):
+        duration = info.get("duration")
+        if not isinstance(duration, (int, float)) or duration <= 0:
+            duration = None
+
+        start, end = download_range
+        if duration is not None:
+            start = min(start, duration)
+            end = min(end, duration)
+        selected_duration = end - start
+        if selected_duration <= 0:
+            return None
+
+        estimate = 0.0
+        for stream in streams:
+            size = stream.get("filesize") or stream.get("filesize_approx")
+            bitrate = stream.get("tbr")
+            if isinstance(size, (int, float)) and size > 0 and duration:
+                estimate += size * selected_duration / duration
+            elif isinstance(bitrate, (int, float)) and bitrate > 0:
+                estimate += bitrate * 1000 * selected_duration / 8
+        return max(1, int(estimate)) if estimate else None
 
     def plan(self, info):
         """Called once, before the download starts, with yt-dlp's full plan (it may be 2 files)."""
@@ -696,22 +826,13 @@ class ProgressTracker:
         if not self.job.get("download_range") or self.range_monitor is not None:
             return
 
-        start, end = self.job["download_range"]
-        duration = info.get("duration") or end
-        full_size = sum(
-            size for stream in streams
-            if isinstance((size := stream.get("filesize") or stream.get("filesize_approx")), (int, float))
+        estimate = self.estimate_range_size(
+            info,
+            streams,
+            self.job["download_range"],
         )
-        if full_size:
-            self.range_total = max(1, int(full_size * (end - start) / duration))
-        else:
-            bitrate = sum(
-                stream.get("tbr") or 0
-                for stream in streams
-                if isinstance(stream.get("tbr"), (int, float))
-            )
-            if bitrate > 0:
-                self.range_total = max(1, int(bitrate * 1000 * (end - start) / 8))
+        with lock:
+            self.job["size_estimate"] = estimate
 
         filename = info.get("_filename")
         if not isinstance(filename, str):
@@ -719,7 +840,7 @@ class ProgressTracker:
         self.range_final_path = filename
         self.range_temp_path = filename + ".part"
         with lock:
-            self.job["size_total"] = self.range_total
+            self.job["size_total"] = None
         self.range_monitor = threading.Thread(
             target=self._watch_range_file,
             daemon=True,
@@ -752,11 +873,8 @@ class ProgressTracker:
                 if self.job["status"] == "downloading":
                     self.job["size_done"] = size
                     self.job["speed"] = speed or None
-                    if self.range_total:
-                        self.job["size_total"] = self.range_total
-                        percent = min(99.0, size * 100.0 / self.range_total)
-                        self.job["percent"] = max(self.job["percent"], percent)
-                        self.job["eta"] = max(0.0, (self.range_total - size) / speed) if speed else None
+                    self.job["size_total"] = None
+                    self.job["eta"] = None
             previous_size, previous_time = size, now
 
     def stop_range_monitor(self):
@@ -840,16 +958,26 @@ def run_job(job):
                 job["title"] = info["title"]
             if figures:
                 job["size_done"] = max(job["size_done"], figures["size_done"])
-                if "size_total" in figures:   # a "downloading" event
-                    if figures["size_total"] is not None or not job.get("download_range"):
-                        job["size_total"] = figures["size_total"]
-                        job["speed"] = figures["speed"]
-                        job["eta"] = figures["eta"]
-                        if figures["percent"] is not None:
-                            job["percent"] = max(job["percent"], figures["percent"])  # never moves backwards
+                if job.get("download_range"):
+                    job["size_total"] = None
+                    job["speed"] = figures.get("speed")
+                    job["eta"] = None
+                elif "size_total" in figures:   # a "downloading" event
+                    job["size_total"] = figures["size_total"]
+                    job["speed"] = figures.get("speed")
+                    job["eta"] = figures.get("eta")
+                    if figures["percent"] is not None:
+                        job["percent"] = max(job["percent"], figures["percent"])  # never moves backwards
 
     def on_postprocess(d):
-        record_subtitle_files(job, d.get("info_dict"))
+        info = d.get("info_dict")
+        record_subtitle_files(job, info)
+        if (
+            d.get("status") == "started"
+            and d.get("postprocessor") == "EmbedSubtitle"
+            and job.get("download_range")
+        ):
+            clip_requested_subtitles(info, job["download_range"], job["output_dir"])
         if d.get("status") == "started" and d.get("postprocessor") != "SizePlanner":
             tracker.stop_range_monitor()
             with lock:
@@ -890,10 +1018,12 @@ def run_job(job):
             job["eta"] = None
     except yt_dlp.utils.DownloadError as e:
         with lock:
+            job["retry_cleanup_paths"].update(job["reserved_output_paths"])
             job["status"] = "error"
             job["error"] = clean_error(e)
     except Exception as e:  # keep the worker thread alive whatever happens
         with lock:
+            job["retry_cleanup_paths"].update(job["reserved_output_paths"])
             job["status"] = "error"
             job["error"] = f"Unexpected error: {clean_error(e, 400)}"
     finally:
@@ -1632,6 +1762,9 @@ def retry_job(job_id):
         if job["status"] != "error":
             return error("Only failed jobs can be retried.", 409)
 
+        cleanup_error = cleanup_retry_outputs(job)
+        if cleanup_error:
+            return error(cleanup_error, 500)
         prepare_job_retry(job)
 
     start_inspect(job_id)
@@ -1645,6 +1778,7 @@ def prepare_job_retry(job):
         "percent": 0.0,
         "size_done": 0,
         "size_total": None,
+        "size_estimate": None,
         "speed": None,
         "eta": None,
         "error": None,
@@ -1656,16 +1790,33 @@ def prepare_job_retry(job):
     job["resume_event"].set()
 
 
+def cleanup_retry_outputs(job):
+    for path in job["retry_cleanup_paths"]:
+        try:
+            if os.path.lexists(path):
+                os.remove(path)
+        except OSError as exc:
+            return (
+                f'Could not remove the incomplete output "{os.path.basename(path)}" '
+                f'before retrying: {clean_error(exc)}'
+            )
+    job["retry_cleanup_paths"].clear()
+    return None
+
+
 @app.post("/api/jobs/retry-all")
 def retry_all_jobs():
     with lock:
         if ytdlp_update_in_progress:
             return error("Wait for the yt-dlp update to finish, then try again.", 409)
-        job_ids = []
-        for job in jobs.values():
-            if job["status"] == "error":
-                prepare_job_retry(job)
-                job_ids.append(job["id"])
+        failed_jobs = [job for job in jobs.values() if job["status"] == "error"]
+        for job in failed_jobs:
+            cleanup_error = cleanup_retry_outputs(job)
+            if cleanup_error:
+                return error(cleanup_error, 500)
+        for job in failed_jobs:
+            prepare_job_retry(job)
+        job_ids = [job["id"] for job in failed_jobs]
 
     for job_id in job_ids:
         start_inspect(job_id)
@@ -1685,6 +1836,9 @@ def skip_subtitles_job(job_id):
         if not job.get("download_subtitles"):
             return error("Subtitles are already disabled for this job.", 409)
 
+        cleanup_error = cleanup_retry_outputs(job)
+        if cleanup_error:
+            return error(cleanup_error, 500)
         job["download_subtitles"] = False
         job.update({
             "status": "inspecting",
@@ -1692,6 +1846,7 @@ def skip_subtitles_job(job_id):
             "percent": 0.0,
             "size_done": 0,
             "size_total": None,
+            "size_estimate": None,
             "speed": None,
             "eta": None,
             "error": None,

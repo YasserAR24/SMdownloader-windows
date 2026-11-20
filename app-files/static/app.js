@@ -685,7 +685,14 @@
             case 'queued': return 'Waiting in queue';
             case 'downloading':
                 var bits = [];
-                if (job.size_total) {
+                if (job.download_range) {
+                    bits.push(job.size_done
+                        ? 'Downloading ' + fmtBytes(job.size_done)
+                        : 'Starting...');
+                    if (job.size_estimate) {
+                        bits.push('estimated total ~' + fmtBytes(job.size_estimate));
+                    }
+                } else if (job.size_total) {
                     bits.push('Downloading ' + Math.round(job.percent) + '%');
                     bits.push(fmtBytes(job.size_done) + ' of ' + fmtBytes(job.size_total));
                 } else if (job.size_done) {
@@ -700,7 +707,12 @@
                 return bits.join(' · ');
             case 'paused':
                 if (job.resume_requested) { return 'Waiting for a download slot'; }
-                return 'Paused' + (job.size_done ? ' · ' + fmtBytes(job.size_done) + ' downloaded' : '');
+                var pausedStatus = 'Paused' +
+                    (job.size_done ? ' · ' + fmtBytes(job.size_done) + ' downloaded' : '');
+                if (job.download_range && job.size_estimate) {
+                    pausedStatus += ' · estimated total ~' + fmtBytes(job.size_estimate);
+                }
+                return pausedStatus;
             case 'processing': return 'Converting...';
             case 'done': return 'Finished';
             case 'cancelled': return 'Cancelled';
@@ -1233,7 +1245,7 @@
             var settings = await api('/api/settings');
             el('output-root-input').value = settings.output_root;
             el('max-concurrent-downloads').value = settings.max_concurrent_downloads;
-            var selectedLanguages = settings.subtitle_preflight_languages || ['en'];
+            var selectedLanguages = settings.subtitle_preflight_languages || ['en', 'ar'];
             document.querySelectorAll('[name="subtitle-preflight-language"]').forEach(function (checkbox) {
                 checkbox.checked = selectedLanguages.indexOf(checkbox.value) !== -1;
             });
