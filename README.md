@@ -20,8 +20,8 @@ Run `config.bat` again. Do this whenever downloads stop working, because yt-dlp 
 
 ## Troubleshooting
 
-- **Python/FFmpeg is not installed:** close the window then open it again after installing.
-- **YouTube fails or shows few qualities:** make sure Deno is installed, then run `config.bat` again.
+- **Python/FFmpeg is not found:** try to open `install-requirements.bat` file again; if they are still not found try to install them manually.
+- **Downloading fails** make sure Deno is installed, then run `config.bat` again.
 - **Port 5000 in use:** the app is already running, or another program uses that port.
 
 ## Features
