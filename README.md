@@ -1,22 +1,18 @@
 # SMdownloader
 
-Download videos and audio from YouTube, Instagram, Facebook, TikTok, LinkedIn and other sites supported by yt-dlp. It runs on your computer and opens in your browser.
+**Social Media Downloader**, Download videos and audio from YouTube, Instagram, Facebook, TikTok, LinkedIn and other sites supported by yt-dlp. It runs on your computer and opens in your browser.
 
 ## Installation (first time only)
 
-1. Download the whole code and extract it.
-2. Open **Command Prompt** (CMD) and run these three commands: (If you already have python skip the first command)
-   `winget install Python.Python.3.13`
-   `winget install Gyan.FFmpeg`
-   `winget install DenoLand.Deno`
-3. **Close Command Prompt.** Double-click `config.bat` and wait until it says "Done".
-
-If Windows shows "Windows protected your PC", click **More info → Run anyway**;Or run it as administrator.
+1. Right click `install-requirements.bat` file and choose **Run as administrator**; Wait until the download is complete. 
+2. Make the same thing to`config.bat` file.
 
 ## Running
 
-Double-click `runSMdownloader.bat`. Your browser opens the app. If it doesn't, go to http://127.0.0.1:5000.
-To stop, close the black window (close CMD window).
+- run `runSMdownloader.bat` file as administrator.A CMD and browser windows will open (the browser window contains the app GUI, and the CMD window contains the local server)
+- if the server still ran, you can open the app GUI window again with this link http://127.0.0.1:5000.
+
+- To stop the app, close the CMD window.
 
 ## Updating
 
@@ -24,7 +20,7 @@ Run `config.bat` again. Do this whenever downloads stop working, because yt-dlp 
 
 ## Troubleshooting
 
-- **"Python/FFmpeg is not installed":** close and reopen the window after installing. If it still fails, sign out and back in.
+- **Python/FFmpeg is not installed:** close the window then open it again after installing.
 - **YouTube fails or shows few qualities:** make sure Deno is installed, then run `config.bat` again.
 - **Port 5000 in use:** the app is already running, or another program uses that port.
 
